@@ -1,6 +1,4 @@
-Скопируйте этот код в файл `README.md` вашего репозитория message-broker:
 
-```markdown
 # In-Memory Message Broker
 
 <div align="center">
