@@ -10,10 +10,9 @@ import (
 	"time"
 )
 
-// queue хранит готовые сообщения и очередь ожидающих получателей (FIFO).
 type queue struct {
-	msgs    []string
-	waiters []chan string
+	msgs    []string      // готовые сообщения (FIFO)
+	waiters []chan string // ожидающие получатели (FIFO)
 }
 
 type broker struct {
@@ -34,7 +33,6 @@ func (b *broker) get(name string) *queue {
 	return q
 }
 
-// put кладёт сообщение: либо отдаёт первому ожидающему, либо в буфер.
 func (b *broker) put(name, msg string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -42,13 +40,12 @@ func (b *broker) put(name, msg string) {
 	if len(q.waiters) > 0 {
 		w := q.waiters[0]
 		q.waiters = q.waiters[1:]
-		w <- msg
+		w <- msg // канал буферизован (cap=1), не блокирует под мьютексом
 		return
 	}
 	q.msgs = append(q.msgs, msg)
 }
 
-// take забирает сообщение сразу или ждёт до таймаута (timeout==0 — не ждём).
 func (b *broker) take(name string, timeout time.Duration) (string, bool) {
 	b.mu.Lock()
 	q := b.get(name)
@@ -66,26 +63,24 @@ func (b *broker) take(name string, timeout time.Duration) (string, bool) {
 	q.waiters = append(q.waiters, ch)
 	b.mu.Unlock()
 
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
 	select {
 	case msg := <-ch:
 		return msg, true
-	case <-time.After(timeout):
-		// таймаут: удаляем себя из очереди ожидающих, если ещё там.
+	case <-timer.C:
 		b.mu.Lock()
 		for i, w := range q.waiters {
 			if w == ch {
 				q.waiters = append(q.waiters[:i], q.waiters[i+1:]...)
-				break
+				b.mu.Unlock()
+				return "", false // нас не обслужили — честный таймаут
 			}
 		}
+		// нас уже убрали из waiters => put отдал сообщение в ch
 		b.mu.Unlock()
-		// гонка: put мог отдать сообщение между таймером и блокировкой.
-		select {
-		case msg := <-ch:
-			return msg, true
-		default:
-			return "", false
-		}
+		return <-ch, true
 	}
 }
 
